@@ -1,0 +1,530 @@
+---
+title: "Calculate Violations"
+author: "Adam Dziorny"
+email: "dziornya@email.chop.edu"
+date: "March 22, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Include required packages.
+
+```{r, message=FALSE, warning=FALSE}
+require(ggplot2)
+require(scales)
+require(dplyr)
+require(svglite)
+require(here)
+
+# For publication level figures;
+require(ggpubr)
+require(cowplot)
+```
+
+Set the default extension for images:
+
+```{r}
+# Set default extension for output images
+extension <- 'png'
+```
+
+## Import Data
+
+First we load in the data file `D_times_results`, containing the result of processing the times files (see `Import Shift Times.Rmd` script).
+
+```{r, echo=FALSE, eval=FALSE}
+# This section was evaluated locally to remove potentially identifiable or unneeded information
+# prior to uploading to Github for PLOS submission. 
+load(file = here::here('data','D_times_results'))
+
+times.results <-
+  times.results %>% 
+  dplyr::select(-V_Durations.L, -V_Intervals.L, -Total_Hrs,  
+                -DaysOff, -DaysInBlock, -YEAR, -IS_MED_PEDS)
+
+levels(times.results$ROT_NM) <- LETTERS[1:length(levels(times.results$ROT_NM))]
+
+levels(times.results$ROLE) <- c('Jr FLC', 'Sr FLC', 'Sr Suprv')
+
+levels(times.results$SOURCE) <- c('ERS', 'SRS')
+
+write.csv(times.results,
+          row.names = F,
+          file = here::here('data','D_aggregate_violations.csv'))
+```
+
+```{r}
+times.results <- read.csv(file = here::here('data', 'D_aggregate_violations.csv'))
+```
+
+## Duty Hours
+
+First we compare violations by role, type and rotation.  This can be done on the full calculated shifts dataset.
+
+  + Duration violations by role
+  
+```{r}
+img <-
+  times.results %>%
+  dplyr::select('ROLE','SOURCE','V_Durations') %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::group_by(ROLE) %>%
+  dplyr::summarise(mean = mean(V_Durations),
+                   sd = sd(V_Durations),
+                   n = n(),
+                   sem = sd(V_Durations)/sqrt(n())) %>%
+  ggplot() +
+  geom_errorbar( aes(x = ROLE, ymin = mean - sem, ymax = mean + sem), width = 0.4, size = 0.8) +
+  geom_col( aes(ROLE, mean) ) +
+  xlab('Role') +
+  ylab('Mean Duration Violations') +
+  ggtitle('EHR-Reported Duration Violations By Role') +
+  theme_bw()
+
+img
+```
+
+  + ANOVA & Tukey Post-Hoc of Duration Violations by Role
+  
+```{r}
+fit <- aov(V_Durations ~ ROLE, data = 
+  dplyr::select(times.results, 'ROLE','SOURCE','V_Durations') %>%
+  dplyr::filter(SOURCE == 'ERS'))
+
+summary(fit)
+
+TukeyHSD(fit)
+
+dplyr::select(times.results, 'ROLE','SOURCE','V_Durations') %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::group_by(ROLE) %>%
+  dplyr::summarize(mean = mean(V_Durations),
+                   median = median(V_Durations),
+                   sem = sd(V_Durations) / sqrt(n()))
+
+rm(fit)
+```
+
+  + Interval violations by role
+  
+```{r}
+img <-
+  times.results %>%
+  dplyr::select('ROLE','SOURCE','V_Intervals') %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::group_by(ROLE) %>%
+  dplyr::summarise(mean = mean(V_Intervals),
+                   sd = sd(V_Intervals),
+                   n = n(),
+                   sem = sd(V_Intervals)/sqrt(n())) %>%
+  ggplot() +
+  geom_errorbar( aes(x = ROLE, ymin = mean - sem, ymax = mean + sem), width = 0.4, size = 0.8) +
+  geom_col( aes(ROLE, mean) ) +
+  xlab('Role') +
+  ylab('Mean Interval Violations') +
+  ggtitle('EHR-Reported Interval Violations By Role') +
+  theme_bw()
+
+img
+```
+
+  + ANOVA & Tukey post-hoc of Interval Violations by Role
+  
+```{r}
+fit <- aov(V_Intervals ~ ROLE, data = 
+  dplyr::select(times.results, 'ROLE','SOURCE','V_Intervals') %>%
+  dplyr::filter(SOURCE == 'ERS'))
+
+summary(fit)
+
+TukeyHSD(fit)
+
+dplyr::select(times.results, 'ROLE','SOURCE','V_Intervals') %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::group_by(ROLE) %>%
+  dplyr::summarize(mean = mean(V_Intervals),
+                   sem = sd(V_Intervals) / sqrt(n()))
+
+rm(fit)
+```
+
+  + Total Violations by Role
+  
+```{r}
+dplyr::select(times.results, 'ROLE', 'SOURCE', 'V_Durations', 'V_Intervals') %>%
+  dplyr::mutate(Violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::group_by(ROLE) %>%
+  dplyr::summarise(sum.T = sum(Violations),
+                   sum.V = sum(V_Durations),
+                   sum.I = sum(V_Intervals))
+```
+
+  + Violations By Type & Role (Facets)
+
+```{r}
+viols.by.type <- rbind(
+  # First include the Duration Violations
+  dplyr::select(times.results, 'ROLE', 'SOURCE', 'V_Durations', 'V_Intervals') %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::group_by(ROLE) %>%
+  dplyr::summarise(mean = mean(V_Durations),
+                   sd = sd(V_Durations),
+                   n = n(),
+                   median = median(V_Durations),
+                   sem = sd(V_Durations)/sqrt(n())) %>%
+  dplyr::mutate(TYPE = 'Duration'),    
+  
+  # Now include the Interval Violations
+  dplyr::select(times.results, 'ROLE', 'SOURCE', 'V_Durations', 'V_Intervals') %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::group_by(ROLE) %>%
+  dplyr::summarise(mean = mean(V_Intervals),
+                   sd = sd(V_Intervals),
+                   n = n(),
+                   median = median(V_Intervals),
+                   sem = sd(V_Intervals)/sqrt(n())) %>%
+  dplyr::mutate(TYPE = 'Interval'),
+  
+  # And lastly include total violations (the sum of these two)
+  dplyr::select(times.results, 'ROLE', 'SOURCE', 'V_Durations', 'V_Intervals') %>%
+  dplyr::mutate(Violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::group_by(ROLE) %>%
+  dplyr::summarise(mean = mean(Violations),
+                   sd = sd(Violations),
+                   n = n(),
+                   median = median(Violations),
+                   sem = sd(Violations)/sqrt(n())) %>%
+  dplyr::mutate(TYPE = 'Total'))
+
+viols.by.type$TYPE <- factor(viols.by.type$TYPE)
+
+img <-
+  viols.by.type %>%
+  ggplot() +
+  geom_errorbar( aes(x = ROLE, ymin = mean - sem, ymax = mean + sem), width = 0.4, size = 0.8) +
+  geom_col( aes(ROLE, mean) ) +
+  facet_grid(. ~ TYPE) +
+  xlab('Role') +
+  ylab('Mean Violations') +
+  ggtitle('Mean Violations By Role By Violation Type')  +
+  theme_bw()
+
+img
+```
+
+  + Violations By Rotation
+  
+```{r}
+viol.by.rot <- 
+  dplyr::select(times.results, c('ROLE', 'SOURCE', 'ROT_NM',  
+                                 'V_Durations', 'V_Intervals')) %>%
+  dplyr::mutate(violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::filter(ROLE %in% c('Jr FLC', 'Sr FLC')) %>%
+  dplyr::group_by(ROT_NM) %>%
+  dplyr::summarise(mean = mean(violations),
+                   sd = sd(violations),
+                   n = n(),
+                   sem = sd(violations)/sqrt(n())) %>%
+  dplyr::arrange(-mean) %>%
+  dplyr::mutate(orders = n() - row_number(mean) + 1,
+                letters = LETTERS[1:n()][orders],
+                ROT_NM = factor(ROT_NM,ROT_NM))
+
+img <-
+  viol.by.rot %>%
+  ggplot() +
+  geom_errorbar( aes(x = letters, ymin = mean - sem, ymax = mean + sem), width = 0.4, size = 0.8) +
+  geom_col( aes(letters, mean) ) +
+  theme_bw() +
+  #theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab('Rotation') +
+  ylab('Mean # EHR-Reported Violations') +
+  ggtitle('Mean EHR-Reported Violations By Rotation')
+
+img
+```
+
+  + ANOVA of Violations by Rotation
+
+```{r}
+fit <- aov(violations ~ ROT_NM, data = 
+  dplyr::select(times.results, c('ROLE', 'SOURCE', 'ROT_NM', 
+                                 'V_Durations', 'V_Intervals')) %>%
+  dplyr::mutate(violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::filter(ROLE %in% c('Jr FLC', 'Sr FLC')))
+
+summary(fit)
+
+dplyr::select(times.results, c('ROLE', 'SOURCE', 'ROT_NM',  
+                                 'V_Durations', 'V_Intervals')) %>%
+  dplyr::mutate(violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(SOURCE == 'ERS') %>%
+  dplyr::filter(ROLE %in% c('Jr FLC', 'Sr FLC')) %>%    
+  dplyr::group_by(ROT_NM) %>%
+  dplyr::summarize(mean = mean(violations),
+                   sem = sd(violations) / sqrt(n()))
+
+rm(fit)
+```
+
+### Compare Violations By Source
+
+When we are comparing violations across sources, we must remember that only a subset of Resident-Blocks had *any* logged New Innovations shifts.  Therefore we will make the comparisons across only those resident-blocks - meaning the sample size of our `HADOOP` sourced shifts will be smaller than above.
+
+```{r}
+rb.count.ni <- matrix(nrow=1, ncol=length(levels(times.results$ROLE)))
+
+for (i in seq_along(levels(times.results$ROLE))) {
+  rb.count.ni[1,i] <- sum(times.results$ROLE == levels(times.results$ROLE)[i] &
+                          times.results$SOURCE == 'SRS' &
+                          times.results$NumShifts > 0)
+}
+
+knitr::kable(rb.count.ni, col.names = levels(times.results$ROLE))
+
+rm(i)
+```
+
+To do this we need a new column in our `times.results` data frame, which specifies if the UID - role combination contained any shifts in the `SRS` data. 
+
+```{r}
+valid.uid.roles <- rbind(
+  data.frame(
+    UID = times.results$UID[times.results$ROLE == 'Jr FLC' &
+                              times.results$SOURCE == 'SRS' &
+                              times.results$NumShifts > 0],
+    ROLE = 'Jr FLC'),
+   data.frame(
+    UID = times.results$UID[times.results$ROLE == 'Sr FLC' &
+                              times.results$SOURCE == 'SRS' &
+                              times.results$NumShifts > 0],
+    ROLE = 'Sr FLC'),
+  data.frame(
+    UID = times.results$UID[times.results$ROLE == 'Sr Suprv' &
+                              times.results$SOURCE == 'SRS' &
+                              times.results$NumShifts > 0],
+    ROLE = 'Sr Suprv')  
+) %>%
+  dplyr::mutate(IS_IN_NI = T)
+
+# Verify that the counts in this table match the counts above:
+valid.uid.roles %>%
+  dplyr::group_by(ROLE) %>% 
+  dplyr::summarise(n = n())
+```
+
+Now that we have a list of valid UIDs by Role, we join this with our times.results data to get a column called IS_IN_NI:
+
+```{r}
+times.results <- dplyr::left_join(x = times.results, y = valid.uid.roles, by = c("UID", "ROLE"))
+times.results$IS_IN_NI[is.na(times.results$IS_IN_NI)] <- F
+
+table(times.results$IS_IN_NI)
+```
+
+Now that we have a variable flagging whether our resident-block-role combination has any shifts in the NI dataset, we can filter on this variable for subsequent analysis in this section.
+
+  + Violations By Role & Source (Facets)
+  
+```{r}
+viol.by.role.source <- 
+  dplyr::select(times.results, 'ROLE', 'SOURCE', 'IS_IN_NI', 'NumShifts', 'V_Durations', 'V_Intervals') %>%
+  dplyr::filter(IS_IN_NI) %>%
+  dplyr::mutate(Violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(NumShifts > 0) %>%
+  dplyr::group_by(ROLE, SOURCE) %>%
+  dplyr::summarise(mean = mean(Violations),
+                   sd = sd(Violations),
+                   n = n(),
+                   median = median(Violations),
+                   sem = sd(Violations)/sqrt(n()))
+
+levels(viol.by.role.source$SOURCE) <- c('EHR-Reported', 'Self-Reported')
+
+img <-
+  viol.by.role.source %>%
+  ggplot() +
+  geom_errorbar( aes(x = ROLE, ymin = mean - sem, ymax = mean + sem), width = 0.4, size = 0.8) +
+  geom_col( aes(ROLE, mean) ) +
+  facet_grid(. ~ SOURCE) +
+  xlab('Role') +
+  ylab('Mean Total Violations') +
+  ggtitle('Violations By Role By Source')  +
+  theme_bw()
+
+img
+```
+
+  + GLM for Violations by Role and Source
+
+```{r}
+viol.glm <- glm(Violations ~ ROLE + SOURCE, data = 
+  dplyr::select(times.results, 'ROLE', 'SOURCE', 'IS_IN_NI', 'NumShifts', 'V_Durations', 'V_Intervals') %>%
+  dplyr::filter(IS_IN_NI) %>%
+  dplyr::mutate(Violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(NumShifts > 0)) 
+
+summary(viol.glm)
+```
+
+  + Violations reported minus calculated
+  
+```{r}
+viol.hadoop <- 
+  dplyr::select(times.results, 'UID','NumShifts','IS_IN_NI','V_Durations','V_Intervals','SOURCE', 'ROLE') %>%
+  dplyr::filter(IS_IN_NI) %>%
+  dplyr::filter(NumShifts > 0) %>%
+  dplyr::mutate(Violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(SOURCE == 'ERS')
+
+viol.ni <- 
+  dplyr::select(times.results, 'UID','NumShifts','IS_IN_NI','V_Durations','V_Intervals','SOURCE', 'ROLE') %>%
+  dplyr::filter(IS_IN_NI) %>%  
+  dplyr::filter(NumShifts > 0) %>%
+  dplyr::mutate(Violations = V_Durations + V_Intervals) %>%
+  dplyr::filter(SOURCE == 'SRS')
+
+viol.combined <- 
+  dplyr::inner_join(x = viol.hadoop, y = viol.ni, by = c('UID', 'ROLE'), suffix = c('.hadoop', '.ni')) %>%
+  dplyr::mutate(diff = Violations.ni - Violations.hadoop) %>%
+  dplyr::group_by(diff) %>%
+  dplyr::summarise(cnt = n()) %>%
+  dplyr::mutate(cumcnt = cumsum(cnt),
+                cnt = cnt )
+
+scale.factor <- sum(viol.combined$cnt)
+
+img <-
+  viol.combined %>%
+  ggplot() + 
+  geom_line( aes(diff, cumcnt) ) +
+  geom_col( aes(diff, cnt)) +
+  scale_y_continuous(limits = c(0, scale.factor), sec.axis = sec_axis(~ . / scale.factor, name='Probability')) +
+  xlab('Violations: SRV - ERV') +
+  ylab('Counts') +
+  ggtitle('Violations: Self-Reported Minus EHR-Reported') +
+  theme_bw()
+
+img
+```
+
+  + Numerics of calculated shifts for results section
+  
+```{r}
+data.frame (
+  diff = viol.combined$diff,
+  perc = viol.combined$cumcnt / 
+    sum(viol.combined$cnt),
+  cnt = viol.combined$cumcnt
+)
+```
+
+## Make Publication Figures 
+
+### Figure 1
+
+```{r}
+A <- 
+  viols.by.type %>%
+  ggplot() +
+  geom_errorbar( aes(x = ROLE, ymin = mean - sem, ymax = mean + sem), width = 0.4, size = 0.8) +
+  geom_col( aes(ROLE, mean) ) +
+  facet_grid(. ~ TYPE) +
+  ylab('Mean # Violations') +
+  theme_bw() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 8),        
+        axis.title.y = element_text(size = 8))     
+
+B <-
+  viol.by.rot %>%
+  ggplot() +
+  geom_errorbar( aes(x = letters, ymin = mean - sem, ymax = mean + sem), width = 0.4, size = 0.8) +
+  geom_col( aes(letters, mean) ) +
+  xlab('Rotation') +
+  theme_bw() +
+  ylab('Mean # Violations') +
+  theme(axis.title.x = element_text(size = 8),
+        axis.text.x = element_text(size = 8),        
+        axis.title.y = element_text(size = 8))  
+
+fig2 <-
+  ggdraw() +
+  draw_plot(A, x = 0.03, y = 0.5, width = 0.97, height = 0.5, scale = 1) +
+  draw_plot(B, x = 0.03, y = 0, width = 0.97, height = 0.5, scale = 1) +
+  draw_plot_label(label = c('A', 'B'), size = 15,
+                  x = c(0, 0), y = c(1, 0.5))
+
+fig2
+
+cowplot::ggsave(filename = here::here('images', 'figure_1.png'),
+                plot = fig2,
+                dpi = 600,
+                width = 7, height = 5, units = 'in')
+
+rm(fig2,A,B)
+```
+
+### Figure 2
+
+```{r, fig.width = 7, fig.height = 7}
+levels(viol.by.role.source$SOURCE) <- c('EHR-Defined Violations (EDV)', 'Self-Reported Violations (SRV)')
+
+A <- 
+  viol.by.role.source %>%
+  ggplot() +
+  geom_errorbar( aes(x = ROLE, ymin = mean - sem, ymax = mean + sem), width = 0.4, size = 0.8) +
+  geom_col( aes(ROLE, mean) ) +
+  facet_grid(. ~ SOURCE) +
+  ylab('Mean Total Violations') +
+  theme_bw() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 10),        
+        axis.title.y = element_text(size = 10))     
+
+B <-
+  viol.combined %>%
+  ggplot() + 
+  geom_line( aes(diff, cumcnt) ) +
+  geom_col( aes(diff, cnt)) +
+  scale_y_continuous(limits = c(0, scale.factor), sec.axis = sec_axis(~ . / scale.factor, name='Probability')) +
+  scale_x_continuous(limits = c(-8, 6)) +
+  xlab('Violations: SRV - EDV') +
+  ylab('Counts') +
+  theme_bw() +
+  theme(axis.title.x = element_text(size = 12),
+        axis.text.x = element_text(size = 10),        
+        axis.title.y = element_text(size = 10)) +
+  annotate('text', x = -7, y = 400, hjust = 0,
+           label = 'More EDV than SRV', fontface = 3, size = 4) +
+  annotate('text', x = 1, y = 400, hjust = 0,
+           label = 'More SRV than EDV', fontface = 3, size = 4) +
+  geom_segment(aes(x = -2, y = 320, xend = -7, yend = 320), 
+               colour='black', size=1, arrow = arrow(length = unit(0.4, "cm"))) +
+  geom_segment(aes(x = 1, y = 320, xend = 6, yend = 320), 
+               colour='black', size=1, arrow = arrow(length = unit(0.4, "cm"))) 
+
+fig3 <-
+  ggdraw() +
+  draw_plot(A, x = 0.03, y = 0, width = 0.94, height = 0.5, scale = 0.96) +
+  draw_plot(B, x = 0.03, y = 0.5, width = 0.97, height = 0.5, scale = 1) +
+  draw_plot_label(label = c('A', 'B'), size = 15,
+                  x = c(0, 0), y = c(1, 0.5))
+
+fig3
+
+cowplot::ggsave(filename = here::here('images', 'figure_2.png'),
+                plot = fig3,
+                dpi = 600,
+                width = 7, height = 7, units = 'in')
+
+rm(fig3,A,B)
+```
+
